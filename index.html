@@ -38,6 +38,10 @@
         <h1 class="text-3xl sm:text-4xl font-extrabold text-gray-800 mb-2 text-center">
             Flat Status Board
         </h1>
+        <!-- NEW LIVE TIME DISPLAY -->
+        <p id="current-time-display" class="text-center text-gray-400 mb-6 text-sm sm:text-base font-medium"></p>
+        <!-- END NEW LIVE TIME DISPLAY -->
+
         <p class="text-center text-gray-500 mb-8 sm:mb-12 text-sm sm:text-base">
             Click your name to toggle your status: <span class="text-emerald-500 font-bold">In (Green)</span> or <span class="text-red-500 font-bold">Out (Red)</span>.
         </p>
@@ -126,6 +130,23 @@
                 statusEl.style.display = 'none';
             }, 3000);
         }
+        
+        // --- NEW: Function to update the clock display ---
+        function updateClock() {
+            const now = new Date();
+            const timeOptions = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true };
+            const dateOptions = { weekday: 'short', month: 'short', day: 'numeric' };
+            
+            const timeString = now.toLocaleTimeString('en-US', timeOptions);
+            const dateString = now.toLocaleDateString('en-US', dateOptions);
+
+            const displayElement = document.getElementById('current-time-display');
+            if (displayElement) {
+                displayElement.textContent = `${dateString} | ${timeString}`;
+            }
+        }
+        // --- END NEW FUNCTION ---
+
 
         /**
          * Renders all status buttons based on the current 'members' array.
@@ -185,7 +206,8 @@
             // Optimistic Update: Update the local state first
             const originalMembers = [...members]; // Copy for potential rollback
             const updatedMembers = members.map(m =>
-                m.id === memberId ? { ...m, m: !m.isIn } : m
+                // FIX: Corrected map function to properly flip the 'isIn' property
+                m.id === memberId ? { ...m, isIn: !m.isIn } : m
             );
             members = updatedMembers;
             renderButtons();
@@ -266,7 +288,11 @@
         renderButtons(); 
         document.getElementById('app-container').classList.add('opacity-50', 'pointer-events-none');
         
-        // 2. Start the connection when the window loads
+        // 2. Start the clock immediately and update it every second
+        updateClock();
+        setInterval(updateClock, 1000);
+
+        // 3. Start the Firebase connection when the window loads
         window.onload = initializeAppAndListener;
     </script>
 
