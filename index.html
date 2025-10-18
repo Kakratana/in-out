@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flat Status Board</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .in-btn {
+          background-color: #10B981; /* Emerald 500 */
+          box-shadow: 0 6px 10px -2px rgba(16, 185, 129, 0.5);
+        }
+        .out-btn {
+          background-color: #EF4444; /* Red 500 */
+          box-shadow: 0 6px 10px -2px rgba(239, 68, 68, 0.5);
+        }
+        .status-button {
+            transition: all 0.2s ease-in-out;
+        }
+        .status-button:hover {
+            transform: scale(1.03);
+        }
+        .status-button:active {
+            transform: scale(0.98);
+        }
+        .user-id {
+            word-break: break-all;
+            font-size: 0.75rem;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen flex flex-col items-center p-4 sm:p-8">
+
+    <div id="app-container" class="w-full max-w-4xl bg-white p-6 sm:p-10 rounded-xl shadow-2xl">
+        <h1 class="text-3xl sm:text-4xl font-extrabold text-gray-800 mb-2 text-center">
+            Flat Status Board
+        </h1>
+        <p class="text-center text-gray-500 mb-8 sm:mb-12 text-sm sm:text-base">
+            Click your name to toggle your status: <span class="text-emerald-500 font-bold">In (Green)</span> or <span class="text-red-500 font-bold">Out (Red)</span>.
+        </p>
+
+        <div id="buttons-container" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-4 sm:gap-6">
+            <!-- Status buttons will be rendered here by JavaScript -->
+        </div>
+
+        <div class="mt-12 p-4 border-t border-gray-200">
+            <h3 class="text-lg font-semibold text-gray-700 mb-2">Technical Info</h3>
+            <p class="text-gray-500 text-sm">
+                <span class="font-medium">App ID:</span> <span id="app-id-display">Loading...</span>
+            </p>
+            <p class="text-gray-500 text-sm">
+                <span class="font-medium">Your User ID:</span> <span id="user-id-display" class="user-id">Loading...</span>
+            </p>
+        </div>
+    </div>
+    
+    <div id="status-message" class="fixed bottom-4 right-4 bg-gray-800 text-white py-2 px-4 rounded-lg shadow-xl hidden"></div>
+
+    <!-- Firebase SDK Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, onSnapshot, setDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Enable Firestore Debug Logging
+        setLogLevel('Debug');
+
+        // --- Global Setup Variables (Provided by Canvas Environment) ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        // FIX: Changed 'initialAuthToken' to '__initial_auth_token' on the right side of the expression
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null; 
+
+        // --- Core Application State ---
+        let db = null;
+        let auth = null;
+        let members = [];
+        let isSaving = false;
+        let isFirstRender = true; // New flag to track initial load
+
+        // --- Initial Roommates List (9 members) ---
+        const INITIAL_MEMBERS = [
+            { id: '1', name: 'K.Ratana', isIn: true },
+            { id: '2', name: 'P.Taivo', isIn: true },
+            { id: '3', name: 'B.Makara', isIn: true },
+            { id: '4', name: 'K.Sokheng', isIn: true },
+            { id: '5', name: 'C.Choub', isIn: true },
+            { id: '6', name: 'S.Hean', isIn: true },
+            { id: '7', name: 'T.Sokleap', isIn: true },
+            { id: '8', name: 'C.Loemheng', isIn: true },
+            { id: '9', name: 'M.Meun', isIn: true },
+        ];
+
+        // --- Firestore Path for Shared Public Data ---
+        const COLLECTION_NAME = 'roommate_status';
+        const DOCUMENT_ID = 'main_status';
+
+        /**
+         * Shows a temporary status message to the user (instead of alert()).
+         * @param {string} message - The message to display.
+         * @param {string} colorClass - Tailwind color class for background (e.g., 'bg-red-500').
+         */
+        function showMessage(message, colorClass = 'bg-gray-800') {
+            const statusEl = document.getElementById('status-message');
+            statusEl.textContent = message;
+            statusEl.className = `fixed bottom-4 right-4 text-white py-2 px-4 rounded-lg shadow-xl ${colorClass}`;
+            statusEl.style.display = 'block';
+            
+            setTimeout(() => {
+                statusEl.style.display = 'none';
+            }, 3000);
+        }
+
+        /**
+         * Renders all status buttons based on the current 'members' array.
+         */
+        function renderButtons() {
+            const container = document.getElementById('buttons-container');
+            // If members array is empty, use the initial list for rendering fallback
+            const membersToRender = members.length > 0 ? members : INITIAL_MEMBERS;
+            
+            container.innerHTML = ''; // Clear existing buttons
+
+            membersToRender.forEach(member => {
+                const buttonContainer = document.createElement('div');
+                buttonContainer.className = 'flex flex-col items-center';
+                
+                const button = document.createElement('button');
+                button.textContent = member.name;
+                // Only allow status changes if the database is active (members list is populated from DB)
+                if (members.length > 0) {
+                    button.onclick = () => toggleStatus(member.id);
+                } else {
+                     button.onclick = () => showMessage("Data is loading. Please try again.", 'bg-yellow-500');
+                }
+
+                // Determine classes based on status
+                const baseClasses = 'status-button w-full h-24 sm:h-32 text-white font-bold text-lg sm:text-xl rounded-2xl focus:outline-none focus:ring-4 focus:ring-opacity-50';
+                // Use member.isIn for color if available, otherwise default to in-btn (green)
+                const isMemberIn = member.isIn !== undefined ? member.isIn : true; 
+                const statusClasses = isMemberIn ? 'in-btn focus:ring-emerald-300' : 'out-btn focus:ring-red-300';
+
+                button.className = `${baseClasses} ${statusClasses}`;
+                button.setAttribute('aria-label', `Toggle status for ${member.name}. Current status: ${isMemberIn ? 'In' : 'Out'}`);
+                
+                buttonContainer.appendChild(button);
+                container.appendChild(buttonContainer);
+            });
+            
+            // Update UI elements
+            document.getElementById('app-id-display').textContent = appId;
+            document.getElementById('user-id-display').textContent = auth?.currentUser?.uid || 'N/A';
+        }
+
+        /**
+         * Updates a member's status locally and attempts to save it to Firestore.
+         * @param {string} memberId - The ID of the member to toggle.
+         */
+        async function toggleStatus(memberId) {
+            if (!db || isSaving) {
+                showMessage("Please wait, the application is still loading or saving.", 'bg-yellow-500');
+                return;
+            }
+            if (members.length === 0) {
+                showMessage("Database data not fully loaded yet.", 'bg-yellow-500');
+                return;
+            }
+
+            isSaving = true;
+
+            // Optimistic Update: Update the local state first
+            const originalMembers = [...members]; // Copy for potential rollback
+            const updatedMembers = members.map(m =>
+                m.id === memberId ? { ...m, isIn: !m.isIn } : m
+            );
+            members = updatedMembers;
+            renderButtons();
+
+            try {
+                const docPath = `/artifacts/${appId}/public/data/${COLLECTION_NAME}/${DOCUMENT_ID}`;
+                const statusDocRef = doc(db, docPath);
+
+                // Update Firestore
+                await setDoc(statusDocRef, { members: updatedMembers });
+                showMessage("Status updated successfully!", 'bg-green-600');
+            } catch (error) {
+                console.error("Error updating status in Firestore:", error);
+                showMessage("Failed to save status. Please check connection.", 'bg-red-600');
+                
+                // Rollback: Revert to original state on failure
+                members = originalMembers;
+                renderButtons();
+            } finally {
+                isSaving = false;
+            }
+        }
+
+        /**
+         * Initializes Firebase, authenticates, and sets up the real-time listener.
+         */
+        async function initializeAppAndListener() {
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                // Authentication
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                const docPath = `/artifacts/${appId}/public/data/${COLLECTION_NAME}/${DOCUMENT_ID}`;
+                const statusDocRef = doc(db, docPath);
+
+                // Set up Real-time Listener
+                onSnapshot(statusDocRef, (docSnapshot) => {
+                    // Ensure we are authenticated before processing
+                    if (!auth || !auth.currentUser) return;
+
+                    if (docSnapshot.exists()) {
+                        // Data exists, use it
+                        const data = docSnapshot.data();
+                        members = data.members || [];
+                        if (isFirstRender && members.length === 0) {
+                             // This handles the edge case where the document exists but is somehow empty
+                             setDoc(statusDocRef, { members: INITIAL_MEMBERS });
+                        }
+                        console.log("Status updated from Firestore.");
+                    } else {
+                        // Data does not exist, initialize it in Firestore
+                        console.log("Initializing data in Firestore...");
+                        setDoc(statusDocRef, { members: INITIAL_MEMBERS })
+                            .then(() => {
+                                members = INITIAL_MEMBERS;
+                                showMessage("Initial status set!", 'bg-blue-600');
+                            })
+                            .catch(err => {
+                                console.error("Error setting initial document:", err);
+                                showMessage("Failed to initialize data.", 'bg-red-600');
+                            });
+                    }
+                    
+                    isFirstRender = false;
+                    // Always render the buttons with the latest data
+                    renderButtons();
+                    document.getElementById('app-container').classList.remove('opacity-50', 'pointer-events-none');
+                }, (err) => {
+                    console.error("Firestore real-time error:", err);
+                    showMessage("Real-time connection lost. Showing default status.", 'bg-red-600');
+                    isFirstRender = false;
+                    // If connection fails, ensure buttons are still rendered with defaults
+                    renderButtons();
+                    document.getElementById('app-container').classList.remove('opacity-50', 'pointer-events-none');
+                });
+
+            } catch (error) {
+                console.error("Application Initialization Failed:", error);
+                showMessage("Failed to start the application.", 'bg-red-600');
+                isFirstRender = false;
+                renderButtons();
+            }
+        }
+
+        // Start the application when the window loads
+        window.onload = initializeAppAndListener;
+        
+        // IMMEDIATE FALLBACK RENDER: Render initial buttons immediately on page load 
+        // while the Firebase connection is establishing, so the UI isn't empty.
+        renderButtons(); 
+
+        // Optionally show a loading state before JS loads
+        document.getElementById('app-container').classList.add('opacity-50', 'pointer-events-none');
+    </script>
+
+</body>
+</html>
