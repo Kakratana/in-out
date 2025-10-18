@@ -4,19 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Flat Status Board</title>
-	
-	    <!-- === ICON / APP ICON DEFINITIONS (START) === -->
-    <!-- Standard Favicon -->
-    <link rel="icon" type="image/png" href="./fav.png">
-    <!-- Apple Touch Icon (used by iOS for "Add to Home Screen") -->
+	<!-- Apple Touch Icon (used by iOS for "Add to Home Screen") -->
     <link rel="apple-touch-icon" sizes="180x180" href="./fav.png">
     <!-- Android/PWA Icon (192x192 is common) -->
     <link rel="icon" type="image/png" sizes="192x192" href="./fav.png">
-    <!-- === ICON / APP ICON DEFINITIONS (END) === -->
-	
     <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <!-- Favicon link will be dynamically updated by JavaScript -->
+    <link id="favicon" rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text x=%2250%%22 y=%2290%%22 style=%22font-size:80px; text-anchor:middle;%22>🏠</text></svg>">
     <style>
         body { font-family: 'Inter', sans-serif; }
         .in-btn {
@@ -141,7 +137,7 @@
             }, 3000);
         }
         
-        // --- NEW: Function to update the clock display ---
+        // --- Function to update the clock display ---
         function updateClock() {
             const now = new Date();
             const timeOptions = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true };
@@ -155,7 +151,29 @@
                 displayElement.textContent = `${dateString} | ${timeString}`;
             }
         }
-        // --- END NEW FUNCTION ---
+        
+        // --- UPDATED: Function to dynamically update the favicon based on ALL members ---
+        function updateFavicon(membersArray) {
+            const faviconEl = document.getElementById('favicon');
+            if (!faviconEl || membersArray.length === 0) return;
+
+            // Check if ANY member is OUT (isIn: false). 
+            const isAnyoneOut = membersArray.some(member => !member.isIn);
+            
+            // Set color: Red if anyone is out, Green if everyone is in.
+            const color = isAnyoneOut ? '#EF4444' : '#10B981'; // Red or Green
+
+            // Generate SVG data URL for a small circle icon
+            const svgData = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>
+                               <circle cx='50' cy='50' r='45' fill='${color}'/>
+                           </svg>`;
+                           
+            // Base64 encode the SVG for use in the data URL
+            const dataUrl = `data:image/svg+xml;base64,${btoa(svgData)}`;
+            
+            faviconEl.setAttribute('href', dataUrl);
+        }
+        // --- END UPDATED FUNCTION ---
 
 
         /**
@@ -199,6 +217,9 @@
             document.getElementById('project-id-display').textContent = projectId;
             document.getElementById('connection-status-display').textContent = connectionSuccessful ? 'Connected' : 'Disconnected (Using Local Fallback)';
             document.getElementById('user-id-display').textContent = auth?.currentUser?.uid || 'N/A (Anonymous)';
+            
+            // Update favicon whenever buttons are rendered
+            updateFavicon(membersToRender); 
         }
 
         /**
