@@ -49,59 +49,72 @@
         <div class="mt-12 p-4 border-t border-gray-200">
             <h3 class="text-lg font-semibold text-gray-700 mb-2">Technical Info</h3>
             <p class="text-gray-500 text-sm">
-                <span class="font-medium">App ID:</span> <span id="app-id-display">Loading...</span>
+                <span class="font-medium">Project ID:</span> <span id="project-id-display">Connecting...</span>
             </p>
             <p class="text-gray-500 text-sm">
-                <span class="font-medium">Your User ID:</span> <span id="user-id-display" class="user-id">Loading...</span>
+                <span class="font-medium">Connection Status:</span> <span id="connection-status-display">Attempting Connection...</span>
+            </p>
+            <p class="text-gray-500 text-sm">
+                <span class="font-medium">Your User ID:</span> <span id="user-id-display" class="user-id">N/A (Anonymous)</span>
             </p>
         </div>
     </div>
     
     <div id="status-message" class="fixed bottom-4 right-4 bg-gray-800 text-white py-2 px-4 rounded-lg shadow-xl hidden"></div>
 
-    <!-- Firebase SDK Imports -->
+    <!-- Firebase SDK Imports (Removed unnecessary auth imports) -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, onSnapshot, setDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        // NOTE: We don't import getAnalytics here as we aren't using it in the core logic.
 
         // Enable Firestore Debug Logging
         setLogLevel('Debug');
 
-        // --- Global Setup Variables (Provided by Canvas Environment) ---
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-        // FIX: Changed 'initialAuthToken' to '__initial_auth_token' on the right side of the expression
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null; 
+        // =========================================================================
+        // !!! USER'S NEW FIREBASE CONFIGURATION !!!
+        // =========================================================================
+        const projectId = "smcheckin-4cb2d"; // Updated Project ID
+        const firebaseConfig = {
+             apiKey: "AIzaSyCXEQYJthCXLNMlgVPmaLtyM72eimsQbJI",
+             authDomain: "smcheckin-4cb2d.firebaseapp.com",
+             projectId: projectId,
+             storageBucket: "smcheckin-4cb2d.firebasestorage.app",
+             messagingSenderId: "23298632157",
+             appId: "1:23298632157:web:11d962a34c57e919332e34",
+             measurementId: "G-YK6DR4N889"
+        };
 
         // --- Core Application State ---
         let db = null;
         let auth = null;
         let members = [];
         let isSaving = false;
-        let isFirstRender = true; // New flag to track initial load
+        let isFirstRender = true;
+        let connectionSuccessful = false;
+        
+        // --- Firestore Path for Shared Public Data (MATCHES YOUR SECURITY RULES) ---
+        // Uses the NEW projectId for the {appId} variable in the path.
+        const FULL_FIREBASE_PATH = `/artifacts/${projectId}/public/data/roommate_status/flat_status_doc`; 
 
         // --- Initial Roommates List (9 members) ---
         const INITIAL_MEMBERS = [
-            { id: '1', name: 'K.Ratana', isIn: true },
-            { id: '2', name: 'P.Taivo', isIn: true },
-            { id: '3', name: 'B.Makara', isIn: true },
-            { id: '4', name: 'K.Sokheng', isIn: true },
-            { id: '5', name: 'C.Choub', isIn: true },
-            { id: '6', name: 'S.Hean', isIn: true },
-            { id: '7', name: 'T.Sokleap', isIn: true },
-            { id: '8', name: 'C.Loemheng', isIn: true },
-            { id: '9', name: 'M.Meun', isIn: true },
+            { id: 'k_ratana', name: 'K.Ratana', isIn: true },
+            { id: 'p_taivo', name: 'P.Taivo', isIn: true },
+            { id: 'b_makara', name: 'B.Makara', isIn: true },
+            { id: 'k_sokheng', name: 'K.Sokheng', isIn: true },
+            { id: 'c_choub', name: 'C.Choub', isIn: true },
+            { id: 's_hean', name: 'S.Hean', isIn: true },
+            { id: 't_sokleap', name: 'T.Sokleap', isIn: true },
+            { id: 'c_loemheng', name: 'C.Loemheng', isIn: true },
+            { id: 'm_meun', name: 'M.Meun', isIn: true },
         ];
-
-        // --- Firestore Path for Shared Public Data ---
-        const COLLECTION_NAME = 'roommate_status';
-        const DOCUMENT_ID = 'main_status';
 
         /**
          * Shows a temporary status message to the user (instead of alert()).
          * @param {string} message - The message to display.
-         * @param {string} colorClass - Tailwind color class for background (e.g., 'bg-red-500').
+         * @param {string} colorClass - Tailwind color class for background.
          */
         function showMessage(message, colorClass = 'bg-gray-800') {
             const statusEl = document.getElementById('status-message');
@@ -119,7 +132,7 @@
          */
         function renderButtons() {
             const container = document.getElementById('buttons-container');
-            // If members array is empty, use the initial list for rendering fallback
+            // If connection is unsuccessful, use the initial list for rendering fallback
             const membersToRender = members.length > 0 ? members : INITIAL_MEMBERS;
             
             container.innerHTML = ''; // Clear existing buttons
@@ -130,11 +143,12 @@
                 
                 const button = document.createElement('button');
                 button.textContent = member.name;
-                // Only allow status changes if the database is active (members list is populated from DB)
-                if (members.length > 0) {
+                
+                // Determine if interaction is allowed (only if connection is established)
+                if (connectionSuccessful) {
                     button.onclick = () => toggleStatus(member.id);
                 } else {
-                     button.onclick = () => showMessage("Data is loading. Please try again.", 'bg-yellow-500');
+                     button.onclick = () => showMessage("Not connected to database. Please check your Firebase setup.", 'bg-red-500');
                 }
 
                 // Determine classes based on status
@@ -151,8 +165,9 @@
             });
             
             // Update UI elements
-            document.getElementById('app-id-display').textContent = appId;
-            document.getElementById('user-id-display').textContent = auth?.currentUser?.uid || 'N/A';
+            document.getElementById('project-id-display').textContent = projectId;
+            document.getElementById('connection-status-display').textContent = connectionSuccessful ? 'Connected' : 'Disconnected (Using Local Fallback)';
+            document.getElementById('user-id-display').textContent = auth?.currentUser?.uid || 'N/A (Anonymous)';
         }
 
         /**
@@ -160,35 +175,31 @@
          * @param {string} memberId - The ID of the member to toggle.
          */
         async function toggleStatus(memberId) {
-            if (!db || isSaving) {
-                showMessage("Please wait, the application is still loading or saving.", 'bg-yellow-500');
+            if (!db || isSaving || !connectionSuccessful) {
+                showMessage("Database connection error. Cannot save.", 'bg-red-600');
                 return;
             }
-            if (members.length === 0) {
-                showMessage("Database data not fully loaded yet.", 'bg-yellow-500');
-                return;
-            }
-
+            
             isSaving = true;
 
             // Optimistic Update: Update the local state first
             const originalMembers = [...members]; // Copy for potential rollback
             const updatedMembers = members.map(m =>
-                m.id === memberId ? { ...m, isIn: !m.isIn } : m
+                m.id === memberId ? { ...m, m: !m.isIn } : m
             );
             members = updatedMembers;
             renderButtons();
 
             try {
-                const docPath = `/artifacts/${appId}/public/data/${COLLECTION_NAME}/${DOCUMENT_ID}`;
-                const statusDocRef = doc(db, docPath);
+                // Use the FULL_FIREBASE_PATH which matches the security rules
+                const statusDocRef = doc(db, FULL_FIREBASE_PATH);
 
                 // Update Firestore
                 await setDoc(statusDocRef, { members: updatedMembers });
-                showMessage("Status updated successfully!", 'bg-green-600');
+                showMessage("Status updated successfully!", 'bg-green-600'); 
             } catch (error) {
                 console.error("Error updating status in Firestore:", error);
-                showMessage("Failed to save status. Please check connection.", 'bg-red-600');
+                showMessage("Failed to save status. Check Firebase Rules.", 'bg-red-600');
                 
                 // Rollback: Revert to original state on failure
                 members = originalMembers;
@@ -207,74 +218,56 @@
                 db = getFirestore(app);
                 auth = getAuth(app);
 
-                // Authentication
-                if (initialAuthToken) {
-                    await signInWithCustomToken(auth, initialAuthToken);
-                } else {
-                    await signInAnonymously(auth);
-                }
+                // Authentication for public hosting: Sign in anonymously to satisfy 'request.auth != null'
+                await signInAnonymously(auth);
 
-                const docPath = `/artifacts/${appId}/public/data/${COLLECTION_NAME}/${DOCUMENT_ID}`;
-                const statusDocRef = doc(db, docPath);
+                // Use the FULL_FIREBASE_PATH which matches the security rules
+                const statusDocRef = doc(db, FULL_FIREBASE_PATH);
 
                 // Set up Real-time Listener
                 onSnapshot(statusDocRef, (docSnapshot) => {
-                    // Ensure we are authenticated before processing
-                    if (!auth || !auth.currentUser) return;
-
+                    connectionSuccessful = true;
                     if (docSnapshot.exists()) {
-                        // Data exists, use it
                         const data = docSnapshot.data();
-                        members = data.members || [];
-                        if (isFirstRender && members.length === 0) {
-                             // This handles the edge case where the document exists but is somehow empty
+                        // Only update if data is valid
+                        if (Array.isArray(data.members)) {
+                            members = data.members;
+                        } else if (isFirstRender) {
+                             // Initialize if the document is present but content is invalid/empty
                              setDoc(statusDocRef, { members: INITIAL_MEMBERS });
                         }
-                        console.log("Status updated from Firestore.");
+                        
                     } else {
                         // Data does not exist, initialize it in Firestore
                         console.log("Initializing data in Firestore...");
-                        setDoc(statusDocRef, { members: INITIAL_MEMBERS })
-                            .then(() => {
-                                members = INITIAL_MEMBERS;
-                                showMessage("Initial status set!", 'bg-blue-600');
-                            })
-                            .catch(err => {
-                                console.error("Error setting initial document:", err);
-                                showMessage("Failed to initialize data.", 'bg-red-600');
-                            });
+                        setDoc(statusDocRef, { members: INITIAL_MEMBERS });
                     }
                     
                     isFirstRender = false;
-                    // Always render the buttons with the latest data
                     renderButtons();
                     document.getElementById('app-container').classList.remove('opacity-50', 'pointer-events-none');
                 }, (err) => {
                     console.error("Firestore real-time error:", err);
-                    showMessage("Real-time connection lost. Showing default status.", 'bg-red-600');
-                    isFirstRender = false;
-                    // If connection fails, ensure buttons are still rendered with defaults
-                    renderButtons();
+                    connectionSuccessful = false;
+                    showMessage("Real-time connection failed. Check your Firebase Rules.", 'bg-red-600');
+                    renderButtons(); // Fallback render on error
                     document.getElementById('app-container').classList.remove('opacity-50', 'pointer-events-none');
                 });
 
             } catch (error) {
                 console.error("Application Initialization Failed:", error);
-                showMessage("Failed to start the application.", 'bg-red-600');
-                isFirstRender = false;
-                renderButtons();
+                connectionSuccessful = false;
+                showMessage("Failed to start Firebase. Check your Config keys.", 'bg-red-600');
+                renderButtons(); // Fallback render on error
             }
         }
 
-        // Start the application when the window loads
-        window.onload = initializeAppAndListener;
-        
-        // IMMEDIATE FALLBACK RENDER: Render initial buttons immediately on page load 
-        // while the Firebase connection is establishing, so the UI isn't empty.
+        // 1. Render fallback buttons immediately to show the UI
         renderButtons(); 
-
-        // Optionally show a loading state before JS loads
         document.getElementById('app-container').classList.add('opacity-50', 'pointer-events-none');
+        
+        // 2. Start the connection when the window loads
+        window.onload = initializeAppAndListener;
     </script>
 
 </body>
