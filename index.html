@@ -4,10 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Flat Status Board</title>
+	
 	<!-- Apple Touch Icon (used by iOS for "Add to Home Screen") -->
     <link rel="apple-touch-icon" sizes="180x180" href="./fav.png">
     <!-- Android/PWA Icon (192x192 is common) -->
     <link rel="icon" type="image/png" sizes="192x192" href="./fav.png">
+	
     <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -25,6 +27,8 @@
         }
         .status-button {
             transition: all 0.2s ease-in-out;
+            /* Ensure the button itself is slightly smaller than the container to fit duration text */
+            height: 80%; 
         }
         .status-button:hover {
             transform: scale(1.03);
@@ -35,6 +39,10 @@
         .user-id {
             word-break: break-all;
             font-size: 0.75rem;
+        }
+        /* Ensure grid cells have enough space for button + duration text */
+        #buttons-container > div {
+            min-height: 120px; /* Adjusted height for content */
         }
     </style>
 </head>
@@ -103,22 +111,25 @@
         let isSaving = false;
         let isFirstRender = true;
         let connectionSuccessful = false;
+        let durationIntervalId = null; // New variable to track the duration update interval
         
         // --- Firestore Path for Shared Public Data (MATCHES YOUR SECURITY RULES) ---
         // Uses the NEW projectId for the {appId} variable in the path.
         const FULL_FIREBASE_PATH = `/artifacts/${projectId}/public/data/roommate_status/flat_status_doc`; 
 
-        // --- Initial Roommates List (9 members) ---
+        // --- Initial Roommates List (10 members) ---
         const INITIAL_MEMBERS = [
-            { id: 'k_ratana', name: 'K.Ratana', isIn: true },
-            { id: 'p_taivo', name: 'P.Taivo', isIn: true },
-            { id: 'b_makara', name: 'B.Makara', isIn: true },
-            { id: 'k_sokheng', name: 'K.Sokheng', isIn: true },
-            { id: 'c_choub', name: 'C.Choub', isIn: true },
-            { id: 's_hean', name: 'S.Hean', isIn: true },
-            { id: 't_sokleap', name: 'T.Sokleap', isIn: true },
-            { id: 'c_loemheng', name: 'C.Loemheng', isIn: true },
-            { id: 'm_meun', name: 'M.Meun', isIn: true },
+            // Added outSince: null to the initial data structure
+            { id: 'k_ratana', name: 'K.Ratana', isIn: true, outSince: null },
+            { id: 'p_taivo', name: 'P.Taivo', isIn: true, outSince: null },
+            { id: 'b_makara', name: 'B.Makara', isIn: true, outSince: null },
+            { id: 'k_sokheng', name: 'K.Sokheng', isIn: true, outSince: null },
+            { id: 'c_choub', name: 'C.Choub', isIn: true, outSince: null },
+            { id: 's_hean', name: 'S.Hean', isIn: true, outSince: null },
+            { id: 't_sokleap', name: 'T.Sokleap', isIn: true, outSince: null },
+            { id: 'c_loemheng', name: 'C.Loemheng', isIn: true, outSince: null },
+            { id: 'm_meun', name: 'M.Meun', isIn: true, outSince: null },
+            { id: 'p_chenda', name: 'P.Chenda', isIn: true, outSince: null }, // NEW MEMBER ADDED
         ];
 
         /**
@@ -151,8 +162,42 @@
                 displayElement.textContent = `${dateString} | ${timeString}`;
             }
         }
+
+        /**
+         * Formats a duration in milliseconds into a human-readable string (e.g., 2h 30m).
+         * @param {number} ms - Duration in milliseconds.
+         * @returns {string} Human-readable duration string.
+         */
+        function formatDuration(ms) {
+            if (!ms || ms < 0) return 'Just now';
+
+            const seconds = Math.floor(ms / 1000);
+            const days = Math.floor(seconds / (3600 * 24));
+            const hours = Math.floor((seconds % (3600 * 24)) / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const remainingSeconds = seconds % 60;
+
+            let parts = [];
+            if (days > 0) parts.push(`${days}d`);
+            if (hours > 0) parts.push(`${hours}h`);
+            if (minutes > 0) parts.push(`${minutes}m`);
+            
+            // Show seconds only if duration is less than one hour and is not just minutes (e.g., 5s, or 3m 45s)
+            if (days === 0 && hours === 0) {
+                 if (parts.length === 0 || minutes === 0 || remainingSeconds > 0) {
+                    parts.push(`${remainingSeconds}s`);
+                 }
+            }
+
+            if (parts.length === 0) {
+                return 'Less than 1m';
+            }
+            
+            // Only show up to two most significant units
+            return parts.slice(0, 2).join(' ');
+        }
         
-        // --- UPDATED: Function to dynamically update the favicon based on ALL members ---
+        // --- Function to dynamically update the favicon based on ALL members ---
         function updateFavicon(membersArray) {
             const faviconEl = document.getElementById('favicon');
             if (!faviconEl || membersArray.length === 0) return;
@@ -173,46 +218,67 @@
             
             faviconEl.setAttribute('href', dataUrl);
         }
-        // --- END UPDATED FUNCTION ---
-
 
         /**
          * Renders all status buttons based on the current 'members' array.
          */
         function renderButtons() {
             const container = document.getElementById('buttons-container');
-            // If connection is unsuccessful, use the initial list for rendering fallback
             const membersToRender = members.length > 0 ? members : INITIAL_MEMBERS;
+            const now = Date.now(); // Current time for duration calculation
             
             container.innerHTML = ''; // Clear existing buttons
 
             membersToRender.forEach(member => {
+                const isMemberIn = member.isIn !== undefined ? member.isIn : true; 
+                
                 const buttonContainer = document.createElement('div');
-                buttonContainer.className = 'flex flex-col items-center';
+                // Use flex-col to stack the button and the duration text
+                buttonContainer.className = 'flex flex-col items-center justify-start'; 
                 
                 const button = document.createElement('button');
                 button.textContent = member.name;
                 
-                // Determine if interaction is allowed (only if connection is established)
                 if (connectionSuccessful) {
                     button.onclick = () => toggleStatus(member.id);
                 } else {
                      button.onclick = () => showMessage("Not connected to database. Please check your Firebase setup.", 'bg-red-500');
                 }
 
-                // Determine classes based on status
-                const baseClasses = 'status-button w-full h-24 sm:h-32 text-white font-bold text-lg sm:text-xl rounded-2xl focus:outline-none focus:ring-4 focus:ring-opacity-50';
-                // Use member.isIn for color if available, otherwise default to in-btn (green)
-                const isMemberIn = member.isIn !== undefined ? member.isIn : true; 
+                // Updated classes to ensure 4 columns on desktop for better use of space with 10 members
+                const baseClasses = 'status-button w-full text-white font-bold text-lg sm:text-xl rounded-2xl focus:outline-none focus:ring-4 focus:ring-opacity-50 flex items-center justify-center';
                 const statusClasses = isMemberIn ? 'in-btn focus:ring-emerald-300' : 'out-btn focus:ring-red-300';
 
                 button.className = `${baseClasses} ${statusClasses}`;
                 button.setAttribute('aria-label', `Toggle status for ${member.name}. Current status: ${isMemberIn ? 'In' : 'Out'}`);
                 
                 buttonContainer.appendChild(button);
+                
+                // --- Duration Display ---
+                if (!isMemberIn && member.outSince) {
+                    // Only show duration if the member is OUT and we have a timestamp
+                    const durationMs = now - member.outSince;
+                    const durationText = formatDuration(durationMs);
+                    
+                    const durationEl = document.createElement('p');
+                    durationEl.textContent = `Out for: ${durationText}`;
+                    durationEl.className = 'text-xs mt-1 font-semibold text-red-700/80';
+                    
+                    buttonContainer.appendChild(durationEl);
+                }
+                // --- END Duration Display ---
+                
                 container.appendChild(buttonContainer);
             });
             
+            // Adjust the grid layout based on the number of members
+            const gridClasses = membersToRender.length <= 9 
+                ? 'grid-cols-2 md:grid-cols-3 lg:grid-cols-3' 
+                : 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-4'; // Added 4-column layout for 10 members
+
+            container.className = `grid gap-4 sm:gap-6 ${gridClasses}`;
+
+
             // Update UI elements
             document.getElementById('project-id-display').textContent = projectId;
             document.getElementById('connection-status-display').textContent = connectionSuccessful ? 'Connected' : 'Disconnected (Using Local Fallback)';
@@ -236,10 +302,16 @@
 
             // Optimistic Update: Update the local state first
             const originalMembers = [...members]; // Copy for potential rollback
-            const updatedMembers = members.map(m =>
-                // FIX: Corrected map function to properly flip the 'isIn' property
-                m.id === memberId ? { ...m, isIn: !m.isIn } : m
-            );
+            const updatedMembers = members.map(m => {
+                if (m.id === memberId) {
+                    const newIsIn = !m.isIn;
+                    // Store timestamp ONLY when switching to OUT
+                    const newOutSince = newIsIn ? null : Date.now(); 
+                    return { ...m, isIn: newIsIn, outSince: newOutSince };
+                }
+                return m;
+            });
+            
             members = updatedMembers;
             renderButtons();
 
@@ -261,7 +333,7 @@
                 isSaving = false;
             }
         }
-
+        
         /**
          * Initializes Firebase, authenticates, and sets up the real-time listener.
          */
@@ -306,6 +378,17 @@
                     renderButtons(); // Fallback render on error
                     document.getElementById('app-container').classList.remove('opacity-50', 'pointer-events-none');
                 });
+                
+                // Start duration ticker only once after successful connection setup
+                if (!durationIntervalId) {
+                    durationIntervalId = setInterval(() => {
+                        // Only re-render if connection is successful AND if there's at least one person out
+                        if (connectionSuccessful && members.some(m => !m.isIn)) {
+                            renderButtons();
+                        }
+                    }, 1000); // Update every second
+                }
+
 
             } catch (error) {
                 console.error("Application Initialization Failed:", error);
